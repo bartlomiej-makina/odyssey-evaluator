@@ -140,23 +140,46 @@ class QuestionAnswerEvaluatorUI:
             Expected Answer: {expected_answer}
             OdysseyAI Answer: {api_answer}
             
-            Please evaluate the accuracy of the OdysseyAI answer compared to the expected answer.
-            Consider:
-            - Factual correctness
-            - Completeness of the answer
-            - Relevance to the question
-            - Overall quality
-            
+            Please evaluate the OdysseyAI answer against the expected answer using the following comprehensive criteria:
+
+            **Primary Evaluation Criteria (Weighted):**
+            1. **Completeness (20%)**: Does the answer include all key source information needed to address the prompt?
+            2. **Clarity & Cohesion (15%)**: Is the answer clear, logical, and appropriately styled?
+            3. **Nuance & Specificity (15%)**: Are entities, qualifiers (dates, locations), and relationships accurate?
+
+            **Detailed Assessment Areas:**
+            - **Explicit Question Relevance**: Does it correctly address the specific prompt asked?
+            - **Accuracy & Hallucination Prevention**: Does it maintain factual accuracy without introducing unsupported information?
+            - **Entity and Conceptual Alignment**: Are domain-specific terms, entities, and concepts used accurately?
+            - **Contextual Boundary Adherence**: Is the answer grounded in and faithful to the source context?
+            - **Contextual Nuance Preservation**: Are temporal constraints, qualifiers, and ambiguities handled accurately?
+            - **Contextual Omission Detection**: Are all crucial contextual elements incorporated?
+            - **Scope & Detail Alignment**: Does the answer match the required level of detail and scope?
+
+            **Scoring Scale Reference:**
+            5 = Excellent (Fully meets criteria, no errors)
+            4 = Good (Minor issues, core purpose intact)
+            3 = Fair (Moderate issues, noticeable flaws)
+            2 = Poor (Significant issues, substantially compromised)
+            1 = Unacceptable (Major errors, unusable)
+
             You MUST respond with valid JSON in exactly this format:
             {{
                 "score": [number from 0-100],
                 "is_correct": "[yes or no]",
-                "explanation": "[brief explanation]",
-                "differences": "[key differences if any]"
+                "explanation": "[detailed explanation covering key criteria]",
+                "differences": "[specific differences and areas of concern]",
+                "criteria_breakdown": {{
+                    "completeness": [1-5],
+                    "clarity_cohesion": [1-5],
+                    "nuance_specificity": [1-5],
+                    "relevance": [1-5],
+                    "accuracy": [1-5]
+                }}
             }}
 
-            is_correct should be yes if the answer at least contains the same information as the expected answer.
-            
+            is_correct should be "yes" if the answer contains substantially the same information as the expected answer and meets core requirements.
+
             Do not include any text before or after the JSON.
             """
             
@@ -164,7 +187,7 @@ class QuestionAnswerEvaluatorUI:
                 messages=[{"role": "user", "content": evaluation_prompt}],
                 model="meta-llama/llama-4-maverick-17b-128e-instruct",
                 temperature=0.0,
-                max_tokens=500,
+                max_tokens=4000,
             )
             
             evaluation_text = chat_completion.choices[0].message.content.strip()
@@ -178,6 +201,7 @@ class QuestionAnswerEvaluatorUI:
                 else:
                     evaluation = json.loads(evaluation_text)
                 
+                # Validate and clean the evaluation data
                 if 'is_correct' in evaluation:
                     evaluation['is_correct'] = evaluation['is_correct'].lower().strip()
                     if evaluation['is_correct'] not in ['yes', 'no']:
@@ -187,6 +211,31 @@ class QuestionAnswerEvaluatorUI:
                 
                 if 'score' not in evaluation or not isinstance(evaluation['score'], (int, float)):
                     evaluation['score'] = 50
+                
+                # Ensure criteria_breakdown exists and has valid values
+                if 'criteria_breakdown' not in evaluation:
+                    evaluation['criteria_breakdown'] = {
+                        'completeness': 3,
+                        'clarity_cohesion': 3,
+                        'nuance_specificity': 3,
+                        'relevance': 3,
+                        'accuracy': 3
+                    }
+                else:
+                    # Validate each criteria score
+                    for criteria in ['completeness', 'clarity_cohesion', 'nuance_specificity', 'relevance', 'accuracy']:
+                        if criteria not in evaluation['criteria_breakdown']:
+                            evaluation['criteria_breakdown'][criteria] = 3
+                        elif not isinstance(evaluation['criteria_breakdown'][criteria], (int, float)):
+                            evaluation['criteria_breakdown'][criteria] = 3
+                        elif evaluation['criteria_breakdown'][criteria] < 1 or evaluation['criteria_breakdown'][criteria] > 5:
+                            evaluation['criteria_breakdown'][criteria] = max(1, min(5, evaluation['criteria_breakdown'][criteria]))
+                
+                # Ensure other required fields exist
+                if 'explanation' not in evaluation:
+                    evaluation['explanation'] = 'No explanation provided'
+                if 'differences' not in evaluation:
+                    evaluation['differences'] = 'No differences specified'
                 
                 return evaluation
                 
@@ -201,8 +250,15 @@ class QuestionAnswerEvaluatorUI:
                 return {
                     'score': extracted_score,
                     'is_correct': extracted_correct,
-                    'explanation': evaluation_text[:200] + "..." if len(evaluation_text) > 200 else evaluation_text,
-                    'differences': 'Unable to parse detailed differences'
+                    'explanation': evaluation_text[:300] + "..." if len(evaluation_text) > 300 else evaluation_text,
+                    'differences': 'Unable to parse detailed differences',
+                    'criteria_breakdown': {
+                        'completeness': 3,
+                        'clarity_cohesion': 3,
+                        'nuance_specificity': 3,
+                        'relevance': 3,
+                        'accuracy': 3
+                    }
                 }
                 
         except Exception as e:
@@ -210,7 +266,14 @@ class QuestionAnswerEvaluatorUI:
                 'score': 0,
                 'is_correct': 'no',
                 'explanation': f'Error during evaluation: {str(e)}',
-                'differences': 'Evaluation failed'
+                'differences': 'Evaluation failed',
+                'criteria_breakdown': {
+                    'completeness': 1,
+                    'clarity_cohesion': 1,
+                    'nuance_specificity': 1,
+                    'relevance': 1,
+                    'accuracy': 1
+                }
             }
     
     def fetch_available_agents(self) -> list:
@@ -497,6 +560,13 @@ def main():
                         df['Differences'] = ''
                         df['API_Status'] = ''
                         
+                        # Add criteria breakdown columns
+                        df['Completeness_Score'] = 0
+                        df['Clarity_Cohesion_Score'] = 0
+                        df['Nuance_Specificity_Score'] = 0
+                        df['Relevance_Score'] = 0
+                        df['Accuracy_Criteria_Score'] = 0
+                        
                         # Show processing configuration
                         st.write("**Processing Configuration:**")
                         st.write(f"• Workspace ID: {workspace_id}")
@@ -554,6 +624,13 @@ def main():
                                 df.at[index, 'Accuracy_Score'] = evaluation.get('score', 0)
                                 df.at[index, 'Evaluation_Explanation'] = evaluation.get('explanation', '')
                                 df.at[index, 'Differences'] = evaluation.get('differences', '')
+                                
+                                # Update criteria breakdown columns
+                                df.at[index, 'Completeness_Score'] = evaluation['criteria_breakdown']['completeness']
+                                df.at[index, 'Clarity_Cohesion_Score'] = evaluation['criteria_breakdown']['clarity_cohesion']
+                                df.at[index, 'Nuance_Specificity_Score'] = evaluation['criteria_breakdown']['nuance_specificity']
+                                df.at[index, 'Relevance_Score'] = evaluation['criteria_breakdown']['relevance']
+                                df.at[index, 'Accuracy_Criteria_Score'] = evaluation['criteria_breakdown']['accuracy']
                             
                             time.sleep(2)  # Rate limiting
                         
